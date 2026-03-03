@@ -31,21 +31,21 @@ All source lives under `ReactivChallengeKit/ReactivChallengeKit/`.
 
 ### Core Protocol
 
-- **`Protocol/ClipExperience.swift`** — Protocol every clip conforms to. Defines `urlPattern`, `clipName`, `clipDescription`, `init(context:)`, and a SwiftUI `body`.
-- **`Protocol/ClipContext.swift`** — Data struct passed to clips containing the invocation URL and extracted `pathParameters`/`queryParameters`.
+- **`Protocol/ClipExperience.swift`** - Protocol every clip conforms to. Defines `urlPattern`, `clipName`, `clipDescription`, `init(context:)`, and a SwiftUI `body`.
+- **`Protocol/ClipContext.swift`** - Data struct passed to clips containing the invocation URL and extracted `pathParameters`/`queryParameters`.
 
 ### Simulator Framework (`Simulator/`)
 
-- **`SimulatorShell.swift`** — Root container view and clip host. Manages the full lifecycle: landing screen, clip invocation, constraint enforcement.
-- **`ClipRouter.swift`** — `@Observable` class that handles URL pattern matching, parameter extraction, and routing. All clip experiences are registered in `ClipRouter.allExperiences`. Also contains `AnyClipView` type erasure helper.
-- **`LandingView.swift`** — Home screen listing registered clips with InvocationConsole.
-- **`InvocationConsole.swift`** — URL input interface replacing real-world QR/NFC triggers.
-- **`ConstraintBanner.swift`** — Replica of real App Clip top banner.
-- **`MomentTimer.swift`** — 30-second countdown timer (green < 20s, yellow < 30s, red >= 30s).
+- **`SimulatorShell.swift`** - Root container view and clip host. Manages the full lifecycle: landing screen, clip invocation, constraint enforcement.
+- **`ClipRouter.swift`** - `@Observable` class that handles URL pattern matching, parameter extraction, and routing. All clip experiences are registered in `ClipRouter.allExperiences`. Also contains `AnyClipView` type erasure helper.
+- **`LandingView.swift`** - Home screen listing registered clips with InvocationConsole.
+- **`InvocationConsole.swift`** - URL input interface replacing real-world QR/NFC triggers.
+- **`ConstraintBanner.swift`** - Replica of real App Clip top banner.
+- **`MomentTimer.swift`** - 30-second countdown timer (green < 20s, yellow < 30s, red >= 30s).
 
 ### Entry Point
 
-`ReactivChallengeKitApp.swift` — Creates `ClipRouter` as `@State`, passes to `SimulatorShell`.
+`ReactivChallengeKitApp.swift` - Creates `ClipRouter` as `@State`, passes to `SimulatorShell`.
 
 ### View Hierarchy
 
@@ -76,6 +76,23 @@ Existing examples: `HelloClipExperience` (minimal), `TrailCheckInExperience` (st
 - **Type erasure:** `AnyClipView` wraps `ClipExperience` conformers so the router can store heterogeneous clips.
 - **Visual style:** Dark-mode gradients, glass-morphism via `.glassEffect()` (SwiftUI 6+), monospaced fonts for URLs/technical text.
 - **Haptics:** Gated with `#if !targetEnvironment(simulator)` for `UIImpactFeedbackGenerator`.
+
+## Problem Statements
+
+The README contains four example problem statements from Reactiv:
+1. **AI-Powered Personalization** - Context-driven recommendations with no login or history
+2. **In-Store Companion Shopping** - Product browsing and self-checkout via Clip
+3. **Ad-to-Clip Commerce** - Ad-driven native shopping with cart persistence and push notifications
+4. **Live Events** - Fan identity capture, merch sales, and real-time engagement at venues
+
+Participants can pick one, combine elements, or invent their own. For checkout-related challenges, Shopify Storefront API + CheckoutSheet Kit or Stripe are recommended.
+
+## Submission Workflow
+
+1. Create a branch
+2. Open a pull request with a description explaining the solution
+3. Include screen recordings of it working
+4. Fill out `SUBMISSION.md` with team info and idea description
 
 ## App Clip Constraints (design rules)
 
