@@ -180,4 +180,10 @@ The hackathon asks: *"What experience fits the shape of an App Clip that nobody 
 Link: *(to be added)*
 
 ### Screenshot(s)
-*(to be added)*
+
+1. (Mock) vital scan
+![vital scan](Media/Vital%20Scan.png)
+2. Health card scan
+![health card scan](Media/Health%20Card%20Scan.png)
+3. Symptom report
+![symptom report](Media/Symptom%20Report.png)
