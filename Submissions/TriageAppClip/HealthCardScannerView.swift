@@ -1,7 +1,7 @@
 import SwiftUI
 import AVFoundation
 import Vision
-import Combine
+internal import Combine
 
 /// Manages a front-camera AVCaptureSession, providing:
 /// 1. A live preview layer (via `CameraPreviewView`)

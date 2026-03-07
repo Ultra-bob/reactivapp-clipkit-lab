@@ -113,7 +113,9 @@ import AVFoundation
 
 struct TriageAppClipExperience: ClipExperience {
     // Set to true to bypass Presage SDK and use random vitals (saves API credits)
-    private static let useMockVitals = true
+    private static let useMockVitals = false
+    // Set to true to display the raw OCR text overlay for debugging the health card scanner
+    private static let showOCRDebugView = true
 
     static let urlPattern = "hospital.ca/triage"
     static let clipName = "Medical Triage"
@@ -131,6 +133,15 @@ struct TriageAppClipExperience: ClipExperience {
     static let invocationSource: InvocationSource = .qrCode
 
     let context: ClipContext
+
+    // Stages
+    enum TriageStage {
+        case faceScan
+        case healthCard
+        case symptoms
+    }
+    @State private var currentStage: TriageStage = .faceScan
+    @State private var firstVitalReceivedTime: Date? = nil
 
     @State private var symptoms: String = ""
     @State private var requestSeatNumber: String = ""
@@ -168,210 +179,294 @@ struct TriageAppClipExperience: ClipExperience {
     @ObservedObject private var vitalsProcessor = SmartSpectraVitalsProcessor.shared
 
     var body: some View {
-        ZStack {
-            ClipBackground()
+        // Custom colors for the design
+        let headerGreen = Color(red: 0.78, green: 0.89, blue: 0.55)
+        let headerTextDarkBlue = Color(red: 0.19, green: 0.33, blue: 0.45)
+        let paleBluePill = Color(red: 0.71, green: 0.83, blue: 0.92)
+        let paleTealPill = Color(red: 0.70, green: 0.87, blue: 0.82)
+        let paleGreenPill = Color(red: 0.78, green: 0.89, blue: 0.55)
+        let dictationBg = Color(red: 0.62, green: 0.75, blue: 0.88)
+        let buttonDarkBlue = Color(red: 0.19, green: 0.28, blue: 0.45)
+        let textFieldGray = Color(red: 0.92, green: 0.92, blue: 0.92)
+
+        VStack(spacing: 0) {
+            // Header Logo Area
+            ZStack(alignment: .bottom) {
+                headerGreen
+                    .ignoresSafeArea(.all, edges: .top)
+                
+                Text("Welcome")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(headerTextDarkBlue)
+                    .padding(.bottom, 16)
+            }
+            .frame(height: 70)
 
             ScrollView {
                 VStack(spacing: 20) {
-                    ClipHeader(
-                        title: "Medical Triage",
-                        subtitle: "Submit symptoms to triage desk.",
-                        systemImage: "cross.case.fill"
-                    )
-                    .padding(.top, 16)
-
                     if submitted {
                         ClipSuccessOverlay(message: "Symptoms received! Please wait for a nurse.")
+                            .padding(.top, 40)
                     } else {
-                        // Live camera preview
-                        if Self.useMockVitals {
-                            CameraPreviewView(cameraManager: cameraManager)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 220)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
-                                )
-                                .overlay(alignment: .topTrailing) {
-                                    Text("MOCK")
-                                        .font(.caption2.bold())
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.orange, in: Capsule())
-                                        .padding(8)
-                                }
+                        // Title for current stage
+                        if currentStage == .faceScan {
+                            Text("**Step 1:** Hold still and scan your face")
+                                .font(.system(size: 18))
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 24)
-                        } else if let cameraImage = vitalsProcessor.imageOutput {
-                            Image(uiImage: cameraImage)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 220)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .padding(.top, 16)
+                        } else if currentStage == .healthCard {
+                            Text("**Step 2:** Scan the front of your\nOntario Health Card")
+                                .font(.system(size: 18))
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 24)
-                        } else {
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(Color(.systemGray5))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 220)
-                                .overlay(
-                                    VStack(spacing: 8) {
-                                        Image(systemName: "camera.fill")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(.secondary)
-                                        Text("Starting camera...")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                )
+                                .padding(.top, 16)
+                        } else if currentStage == .symptoms {
+                            Text("**Step 3:** Describe your symptoms")
+                                .font(.system(size: 18))
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 24)
+                                .padding(.top, 16)
                         }
 
-                        VStack(alignment: .leading, spacing: 8) {
-
-                            Text("What are your symptoms?")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            
-                            HStack(spacing: 8) {
-                                TextField("Describe how you feel...", text: $symptoms)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .disabled(isSubmitting)
-
-                                Button {
-                                    isDictating ? stopDictation() : startDictation()
-                                } label: {
-                                    Image(systemName: isDictating ? "mic.fill" : "mic")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(isDictating ? .red : .accentColor)
-                                        .frame(width: 44, height: 44)
-                                        .background(
-                                            Circle()
-                                                .fill(isDictating
-                                                    ? Color.red.opacity(0.12)
-                                                    : Color.accentColor.opacity(0.08))
-                                        )
-                                }
-                                .disabled(isSubmitting)
-                                .accessibilityLabel(isDictating ? "Stop dictation" : "Start dictation")
-                            }
-                                
-                            let hrMedian = median(of: hrBuffer)
-                            let rrMedian = median(of: rrBuffer)
-                            let bpMedian = median(of: bpBuffer)
-
-                            if hrMedian == nil && rrMedian == nil && bpMedian == nil {
-                                Text(vitalsProcessor.statusHint.isEmpty ? "Waiting for face..." : vitalsProcessor.statusHint)
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                    .italic()
-                                    .padding(.top, 8)
+                        // Live camera preview needed during face scan and health card scan
+                        if currentStage == .faceScan || currentStage == .healthCard {
+                            if Self.useMockVitals {
+                                CameraPreviewView(cameraManager: cameraManager)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 240)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+                                    )
+                                    .overlay(alignment: .topTrailing) {
+                                        Text("MOCK")
+                                            .font(.caption2.bold())
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.orange, in: Capsule())
+                                            .padding(8)
+                                    }
+                                    .padding(.horizontal, 24)
+                                    .transition(.opacity)
+                            } else if let cameraImage = vitalsProcessor.imageOutput {
+                                Image(uiImage: cameraImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 240)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                                    .padding(.horizontal, 24)
+                                    .transition(.opacity)
                             } else {
-                                HStack(spacing: 24) {
-                                    if let hr = hrMedian {
-                                        VStack(alignment: .leading) {
-                                            Text("Heart Rate")
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(.systemGray5))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 240)
+                                    .overlay(
+                                        VStack(spacing: 8) {
+                                            Image(systemName: "camera.fill")
+                                                .font(.system(size: 32))
+                                                .foregroundColor(.secondary)
+                                            Text("Starting camera...")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
-                                            Text("\(Int(hr)) BPM")
-                                                .font(.headline)
-                                                .foregroundColor(.red)
                                         }
-                                    }
-                                    if let rr = rrMedian {
-                                        VStack(alignment: .leading) {
-                                            Text("Breathing")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                            Text("\(Int(rr)) RPM")
-                                                .font(.headline)
-                                                .foregroundColor(.blue)
-                                        }
-                                    }
-                                    if let bp = bpMedian {
-                                        VStack(alignment: .leading) {
-                                            Text("Blood Pressure")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                            Text("\(Int(bp)) mmHg")
-                                                .font(.headline)
-                                                .foregroundColor(.purple)
-                                        }
-                                    }
-                                }
-                                .padding(.top, 8)
+                                    )
+                                    .padding(.horizontal, 24)
+                                    .transition(.opacity)
                             }
                         }
-                        .padding(.horizontal, 24)
 
-                        // Health card (optional — auto-scanned from camera)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Health Card (Optional)")
-                                .font(.headline)
-                                .foregroundColor(.primary)
+                        if currentStage == .faceScan {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Results:")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(.primary)
 
-                            HStack(spacing: 8) {
-                                TextField("Card number", text: $healthCardNumber)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .font(.body.monospacedDigit())
-                                    .disabled(isSubmitting)
+                                let hrMedian = median(of: hrBuffer)
+                                let rrMedian = median(of: rrBuffer)
+                                let bpMedian = median(of: bpBuffer)
+
+                                HStack(spacing: 12) {
+                                    if hrMedian == nil && rrMedian == nil && bpMedian == nil {
+                                        Text(vitalsProcessor.statusHint.isEmpty ? "Waiting for face..." : vitalsProcessor.statusHint)
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                            .italic()
+                                    } else {
+                                        if let hr = hrMedian {
+                                            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                                                Text("\(Int(hr))")
+                                                    .font(.system(size: 16, weight: .bold))
+                                                Text("bpm")
+                                                    .font(.system(size: 14))
+                                            }
+                                            .foregroundColor(.black)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(paleBluePill, in: Capsule())
+                                        }
+                                        if let rr = rrMedian {
+                                            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                                                Text("\(Int(rr))")
+                                                    .font(.system(size: 16, weight: .bold))
+                                                Text("/min")
+                                                    .font(.system(size: 14))
+                                            }
+                                            .foregroundColor(.black)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(paleTealPill, in: Capsule())
+                                        }
+                                        if let bp = bpMedian {
+                                            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                                                Text("\(Int(bp))")
+                                                    .font(.system(size: 16, weight: .bold))
+                                                Text(" mm Hg")
+                                                    .font(.system(size: 14))
+                                            }
+                                            .foregroundColor(.black)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(paleGreenPill, in: Capsule())
+                                        }
+                                    }
+                                    Spacer()
+                                }
+                                
+                                if firstVitalReceivedTime != nil {
+                                    ProgressView()
+                                        .padding(.top, 16)
+                                        .frame(maxWidth: .infinity, alignment: .center)
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                            .transition(.slide)
+
+                        } else if currentStage == .healthCard {
+                            VStack(alignment: .center, spacing: 16) {
+                                // Debug: show raw OCR text
+                                if Self.showOCRDebugView, !ocrDebugTexts.isEmpty {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("DEBUG — OCR")
+                                            .font(.caption2.bold())
+                                            .foregroundColor(.orange)
+                                        ForEach(Array(ocrDebugTexts.enumerated()), id: \.offset) { _, text in
+                                            Text(text)
+                                                .font(.caption2.monospaced())
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .padding(8)
+                                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 8))
+                                }
 
                                 if !healthCardNumber.isEmpty {
-                                    Button {
-                                        healthCardNumber = ""
-                                        startOCRScanning()
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(.secondary)
-                                    }
+                                    Label("Card detected: \(healthCardNumber)", systemImage: "checkmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
                                 }
-                            }
 
-                            if healthCardNumber.isEmpty {
-                                Label("Hold your health card up to the camera to scan", systemImage: "camera.viewfinder")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Label("Card detected!", systemImage: "checkmark.circle.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.green)
-                            }
-
-                            // Debug: show raw OCR text
-                            if !ocrDebugTexts.isEmpty {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("DEBUG — OCR")
-                                        .font(.caption2.bold())
-                                        .foregroundColor(.orange)
-                                    ForEach(Array(ocrDebugTexts.enumerated()), id: \.offset) { _, text in
-                                        Text(text)
-                                            .font(.caption2.monospaced())
-                                            .foregroundColor(.secondary)
+                                Button {
+                                    withAnimation {
+                                        currentStage = .symptoms
+                                        stopOCRScanning()
                                     }
+                                } label: {
+                                    Text(healthCardNumber.isEmpty ? "I don't have my\nhealth card" : "Next")
+                                        .font(.system(size: 20, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.vertical, 16)
+                                        .frame(maxWidth: .infinity)
+                                        .background(buttonDarkBlue, in: RoundedRectangle(cornerRadius: 16))
                                 }
-                                .padding(8)
-                                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 8))
-                            }
-                        }
-                        .padding(.horizontal, 24)
-
-                        if let errorMessage = errorMessage {
-                            Text(errorMessage)
-                                .foregroundColor(.red)
-                                .font(.footnote)
                                 .padding(.horizontal, 24)
-                        }
+                            }
+                            .transition(.slide)
 
-                        ClipActionButton(title: isSubmitting ? "Submitting..." : "Submit", icon: "paperplane.fill") {
-                            submitSymptoms()
+                        } else if currentStage == .symptoms {
+                            VStack(spacing: 24) {
+                                // Text area with dictation inside
+                                ZStack(alignment: .topTrailing) {
+                                    ZStack(alignment: .topLeading) {
+                                        if #available(iOS 16.0, *) {
+                                            TextEditor(text: $symptoms)
+                                                .font(.system(size: 18))
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 16)
+                                                .frame(height: 200)
+                                                .scrollContentBackground(.hidden)
+                                                .background(textFieldGray)
+                                                .cornerRadius(16)
+                                        } else {
+                                            TextEditor(text: $symptoms)
+                                                .font(.system(size: 18))
+                                                .padding(12)
+                                                .frame(height: 200)
+                                                .background(textFieldGray)
+                                                .cornerRadius(16)
+                                        }
+                                        
+                                        if symptoms.isEmpty {
+                                            Text("Type...")
+                                                .font(.system(size: 18))
+                                                .foregroundColor(Color(white: 0.6))
+                                                .padding(.horizontal, 20)
+                                                .padding(.vertical, 24)
+                                                .allowsHitTesting(false)
+                                        }
+                                    }
+
+                                    Button {
+                                        isDictating ? stopDictation() : startDictation()
+                                    } label: {
+                                        Image(systemName: "mic.fill")
+                                            .font(.system(size: 16, weight: .bold))
+                                            .foregroundColor(isDictating ? .white : headerTextDarkBlue)
+                                            .frame(width: 32, height: 32)
+                                            .background(isDictating ? Color.red : dictationBg, in: Circle())
+                                    }
+                                    .padding(16)
+                                    .accessibilityLabel(isDictating ? "Stop dictation" : "Start dictation")
+                                }
+                                .padding(.horizontal, 24)
+
+                                if let errorMessage = errorMessage {
+                                    Text(errorMessage)
+                                        .foregroundColor(.red)
+                                        .font(.footnote)
+                                        .padding(.horizontal, 24)
+                                }
+
+                                VStack(spacing: 8) {
+                                    Button {
+                                        submitSymptoms()
+                                    } label: {
+                                        Text(isSubmitting ? "Submitting..." : "Submit")
+                                            .font(.system(size: 24, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 16)
+                                            .background(buttonDarkBlue, in: Capsule())
+                                    }
+                                    .disabled(symptoms.isEmpty || isSubmitting)
+                                    .padding(.horizontal, 24)
+
+                                    Text("Please wait for further assistance\nfrom a healthcare professional")
+                                        .multilineTextAlignment(.center)
+                                        .font(.system(size: 14))
+                                        .foregroundColor(Color(white: 0.4))
+                                }
+                            }
+                            .transition(.slide)
                         }
-                        .disabled(symptoms.isEmpty || isSubmitting)
-                        .padding(.horizontal, 24)
                     }
                 }
-                .padding(.bottom, 16)
+                .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
         }
@@ -419,8 +514,26 @@ struct TriageAppClipExperience: ClipExperience {
                 bpBuffer.append((now, bp))
                 bpBuffer.removeAll { $0.0 < cutoff }
             }
+            
+            checkFaceScanProgress()
         }
-
+    }
+    
+    // MARK: - Face Scan Progress Check
+    
+    private func checkFaceScanProgress() {
+        guard currentStage == .faceScan else { return }
+        
+        // Ensure we actually have data before we start the clock
+        if !hrBuffer.isEmpty || !rrBuffer.isEmpty || !bpBuffer.isEmpty {
+            if firstVitalReceivedTime == nil {
+                firstVitalReceivedTime = Date()
+            } else if let startTime = firstVitalReceivedTime, Date().timeIntervalSince(startTime) >= 5.0 {
+                withAnimation {
+                    currentStage = .healthCard
+                }
+            }
+        }
     }
 
     private func submitSymptoms() {
@@ -524,6 +637,8 @@ struct TriageAppClipExperience: ClipExperience {
 
             bpBuffer.append((now, bp))
             bpBuffer.removeAll { $0.0 < cutoff }
+            
+            checkFaceScanProgress()
         }
     }
 
@@ -554,7 +669,22 @@ struct TriageAppClipExperience: ClipExperience {
     }
 
     private func runOCROnFrame(_ image: UIImage) {
-        guard let cgImage = image.cgImage else { return }
+        let finalCGImage: CGImage?
+        
+        if let cg = image.cgImage {
+            finalCGImage = cg
+        } else if let ci = image.ciImage {
+            let context = CIContext()
+            finalCGImage = context.createCGImage(ci, from: ci.extent)
+        } else {
+            UIGraphicsBeginImageContext(image.size)
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+            let drawnImage = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            finalCGImage = drawnImage?.cgImage
+        }
+        
+        guard let cgImage = finalCGImage else { return }
 
         let request = VNRecognizeTextRequest { request, error in
             guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
@@ -583,14 +713,26 @@ struct TriageAppClipExperience: ClipExperience {
             }
 
             DispatchQueue.main.async {
-                healthCardNumber = formatted
+                withAnimation {
+                    healthCardNumber = formatted
+                }
                 stopOCRScanning()
+                
+                // Auto-advance to next stage
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    if self.currentStage == .healthCard {
+                        withAnimation {
+                            self.currentStage = .symptoms
+                        }
+                    }
+                }
             }
         }
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
 
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        let orientation: CGImagePropertyOrientation = !Self.useMockVitals ? .upMirrored : .up
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
         try? handler.perform([request])
     }
 
