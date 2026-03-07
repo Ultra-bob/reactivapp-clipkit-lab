@@ -1,12 +1,14 @@
 import SwiftUI
 import SmartSpectraSwiftSDK
 import Speech
-import VisionKit
-internal import AVFoundation
+import Vision
+import AVFoundation
 
 struct TriageAppClipExperience: ClipExperience {
     // Set to true to bypass Presage SDK and use random vitals (saves API credits)
     private static let useMockVitals = true
+    // Set to true to display the raw OCR text overlay for debugging the health card scanner
+    private static let showOCRDebugView = true
 
     static let urlPattern = "hospital.ca/triage"
     static let clipName = "Medical Triage"
@@ -32,9 +34,11 @@ struct TriageAppClipExperience: ClipExperience {
     @State private var submitted: Bool = false
     @State private var errorMessage: String? = nil
 
-    // Health card scanner
+    // Health card OCR (runs on existing camera feed)
     @State private var healthCardNumber: String = ""
-    @State private var showCardScanner: Bool = false
+    @State private var ocrTimer: Timer? = nil
+    @State private var ocrDebugTexts: [String] = []
+    private static let ohipPattern = #"\b(\d{4})[\s\-]*(\d{3})[\s\-]*(\d{3})[\s\-]*([A-Za-z]{2})?\b"#
 
     // Dictation
     @State private var isDictating: Bool = false
@@ -51,6 +55,9 @@ struct TriageAppClipExperience: ClipExperience {
 
     // Mock vitals timer
     @State private var mockTimer: Timer? = nil
+
+    // Front camera for mock mode (provides preview + OCR frames)
+    @StateObject private var cameraManager = CameraManager()
 
     @ObservedObject private var sdk = SmartSpectraSwiftSDK.shared
     @ObservedObject private var vitalsProcessor = SmartSpectraVitalsProcessor.shared
@@ -71,22 +78,25 @@ struct TriageAppClipExperience: ClipExperience {
                     if submitted {
                         ClipSuccessOverlay(message: "Symptoms received! Please wait for a nurse.")
                     } else {
-                        // Live camera preview (or mock placeholder)
+                        // Live camera preview
                         if Self.useMockVitals {
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(Color(.systemGray5))
+                            CameraPreviewView(cameraManager: cameraManager)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 220)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
                                 .overlay(
-                                    VStack(spacing: 8) {
-                                        Image(systemName: "waveform.path.ecg")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(.orange)
-                                        Text("Mock Mode — No Camera")
-                                            .font(.caption)
-                                            .foregroundColor(.orange)
-                                    }
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
                                 )
+                                .overlay(alignment: .topTrailing) {
+                                    Text("MOCK")
+                                        .font(.caption2.bold())
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.orange, in: Capsule())
+                                        .padding(8)
+                                }
                                 .padding(.horizontal, 24)
                         } else if let cameraImage = vitalsProcessor.imageOutput {
                             Image(uiImage: cameraImage)
@@ -191,7 +201,7 @@ struct TriageAppClipExperience: ClipExperience {
                         }
                         .padding(.horizontal, 24)
 
-                        // Health card (optional)
+                        // Health card (optional — auto-scanned from camera)
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Health Card (Optional)")
                                 .font(.headline)
@@ -206,31 +216,39 @@ struct TriageAppClipExperience: ClipExperience {
                                 if !healthCardNumber.isEmpty {
                                     Button {
                                         healthCardNumber = ""
+                                        startOCRScanning()
                                     } label: {
                                         Image(systemName: "xmark.circle.fill")
                                             .foregroundColor(.secondary)
                                     }
                                 }
-
-                                Button {
-                                    showCardScanner = true
-                                } label: {
-                                    Image(systemName: "camera.viewfinder")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.accentColor)
-                                        .frame(width: 44, height: 44)
-                                        .background(
-                                            Circle()
-                                                .fill(Color.accentColor.opacity(0.08))
-                                        )
-                                }
-                                .disabled(isSubmitting)
-                                .accessibilityLabel("Scan health card")
                             }
 
-                            Text("Scan your Ontario health card or type the number.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            if healthCardNumber.isEmpty {
+                                Label("Hold your health card up to the camera to scan", systemImage: "camera.viewfinder")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Label("Card detected!", systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
+
+                            // Debug: show raw OCR text
+                            if Self.showOCRDebugView, !ocrDebugTexts.isEmpty {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("DEBUG — OCR")
+                                        .font(.caption2.bold())
+                                        .foregroundColor(.orange)
+                                    ForEach(Array(ocrDebugTexts.enumerated()), id: \.offset) { _, text in
+                                        Text(text)
+                                            .font(.caption2.monospaced())
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(8)
+                                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 8))
+                            }
                         }
                         .padding(.horizontal, 24)
 
@@ -257,6 +275,7 @@ struct TriageAppClipExperience: ClipExperience {
 
             if Self.useMockVitals {
                 startMockVitals()
+                cameraManager.start()
             } else {
                 SmartSpectraSwiftSDK.shared.setApiKey("ShdNWcKc0D5alluayVgzv75yQxjWfOg3953qUs4M")
                 sdk.setSmartSpectraMode(.continuous)
@@ -265,10 +284,13 @@ struct TriageAppClipExperience: ClipExperience {
                 vitalsProcessor.startProcessing()
                 vitalsProcessor.startRecording()
             }
+            startOCRScanning()
         }
         .onDisappear {
+            stopOCRScanning()
             if Self.useMockVitals {
                 stopMockVitals()
+                cameraManager.stop()
             } else {
                 vitalsProcessor.stopRecording()
                 vitalsProcessor.stopProcessing()
@@ -293,9 +315,7 @@ struct TriageAppClipExperience: ClipExperience {
                 bpBuffer.removeAll { $0.0 < cutoff }
             }
         }
-        .sheet(isPresented: $showCardScanner) {
-            HealthCardScannerView(scannedNumber: $healthCardNumber)
-        }
+
     }
 
     private func submitSymptoms() {
@@ -405,6 +425,68 @@ struct TriageAppClipExperience: ClipExperience {
     private func stopMockVitals() {
         mockTimer?.invalidate()
         mockTimer = nil
+    }
+
+    // MARK: - Health Card OCR (runs on camera feed)
+
+    private func startOCRScanning() {
+        // Don't scan if we already have a number
+        guard healthCardNumber.isEmpty else { return }
+        ocrTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            guard healthCardNumber.isEmpty else {
+                stopOCRScanning()
+                return
+            }
+            if let image = Self.useMockVitals ? cameraManager.latestFrame : vitalsProcessor.imageOutput {
+                runOCROnFrame(image)
+            }
+        }
+    }
+
+    private func stopOCRScanning() {
+        ocrTimer?.invalidate()
+        ocrTimer = nil
+    }
+
+    private func runOCROnFrame(_ image: UIImage) {
+        guard let cgImage = image.cgImage else { return }
+
+        let request = VNRecognizeTextRequest { request, error in
+            guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
+
+            let texts = observations.compactMap { $0.topCandidates(1).first?.string }
+
+            DispatchQueue.main.async {
+                ocrDebugTexts = texts
+            }
+
+            let combined = texts.joined(separator: " ")
+
+            guard let regex = try? NSRegularExpression(pattern: Self.ohipPattern, options: []) else { return }
+            let range = NSRange(combined.startIndex..., in: combined)
+            guard let match = regex.firstMatch(in: combined, options: [], range: range) else { return }
+
+            guard let g1Range = Range(match.range(at: 1), in: combined),
+                  let g2Range = Range(match.range(at: 2), in: combined),
+                  let g3Range = Range(match.range(at: 3), in: combined) else { return }
+
+            var formatted = "\(combined[g1Range])-\(combined[g2Range])-\(combined[g3Range])"
+
+            if match.range(at: 4).location != NSNotFound,
+               let vcRange = Range(match.range(at: 4), in: combined) {
+                formatted += "-\(combined[vcRange].uppercased())"
+            }
+
+            DispatchQueue.main.async {
+                healthCardNumber = formatted
+                stopOCRScanning()
+            }
+        }
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try? handler.perform([request])
     }
 
     // MARK: - Dictation
