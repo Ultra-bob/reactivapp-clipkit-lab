@@ -27,6 +27,12 @@ struct TriageAppClipExperience: ClipExperience {
     @State private var submitted: Bool = false
     @State private var errorMessage: String? = nil
 
+    // Rolling 5-second vitals buffers: (timestamp, value)
+    @State private var hrBuffer: [(Date, Float)] = []
+    @State private var rrBuffer: [(Date, Float)] = []
+    @State private var bpBuffer: [(Date, Float)] = []
+    private let bufferWindow: TimeInterval = 5.0
+
     @ObservedObject private var sdk = SmartSpectraSwiftSDK.shared
     @ObservedObject private var vitalsProcessor = SmartSpectraVitalsProcessor.shared
 
@@ -83,11 +89,11 @@ struct TriageAppClipExperience: ClipExperience {
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .disabled(isSubmitting)
                                 
-                            let hr = sdk.metricsBuffer?.pulse.rate.last?.value
-                            let rr = sdk.metricsBuffer?.breathing.rate.last?.value
-                            let bp = sdk.metricsBuffer?.bloodPressure.phasic.last?.value
-                            
-                            if hr == nil && rr == nil && bp == nil {
+                            let hrMedian = median(of: hrBuffer)
+                            let rrMedian = median(of: rrBuffer)
+                            let bpMedian = median(of: bpBuffer)
+
+                            if hrMedian == nil && rrMedian == nil && bpMedian == nil {
                                 Text(vitalsProcessor.statusHint.isEmpty ? "Waiting for face..." : vitalsProcessor.statusHint)
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
@@ -95,7 +101,7 @@ struct TriageAppClipExperience: ClipExperience {
                                     .padding(.top, 8)
                             } else {
                                 HStack(spacing: 24) {
-                                    if let hr = hr {
+                                    if let hr = hrMedian {
                                         VStack(alignment: .leading) {
                                             Text("Heart Rate")
                                                 .font(.caption)
@@ -105,7 +111,7 @@ struct TriageAppClipExperience: ClipExperience {
                                                 .foregroundColor(.red)
                                         }
                                     }
-                                    if let rr = rr {
+                                    if let rr = rrMedian {
                                         VStack(alignment: .leading) {
                                             Text("Breathing")
                                                 .font(.caption)
@@ -115,7 +121,7 @@ struct TriageAppClipExperience: ClipExperience {
                                                 .foregroundColor(.blue)
                                         }
                                     }
-                                    if let bp = bp {
+                                    if let bp = bpMedian {
                                         VStack(alignment: .leading) {
                                             Text("Blood Pressure")
                                                 .font(.caption)
@@ -163,6 +169,24 @@ struct TriageAppClipExperience: ClipExperience {
             vitalsProcessor.stopRecording()
             vitalsProcessor.stopProcessing()
         }
+        .onChange(of: sdk.metricsBuffer) { metrics in
+            guard let metrics = metrics else { return }
+            let now = Date()
+            let cutoff = now.addingTimeInterval(-bufferWindow)
+
+            if let hr = metrics.pulse.rate.last?.value {
+                hrBuffer.append((now, hr))
+                hrBuffer.removeAll { $0.0 < cutoff }
+            }
+            if let rr = metrics.breathing.rate.last?.value {
+                rrBuffer.append((now, rr))
+                rrBuffer.removeAll { $0.0 < cutoff }
+            }
+            if let bp = metrics.bloodPressure.phasic.last?.value {
+                bpBuffer.append((now, bp))
+                bpBuffer.removeAll { $0.0 < cutoff }
+            }
+        }
     }
 
     private func submitSymptoms() {
@@ -181,18 +205,10 @@ struct TriageAppClipExperience: ClipExperience {
             "symptoms": symptoms,
             "seatNumber": "Unknown"
         ]
-        
-        if let metrics = sdk.metricsBuffer {
-            if let hr = metrics.pulse.rate.last?.value {
-                payload["heartRate"] = Int(hr)
-            }
-            if let rr = metrics.breathing.rate.last?.value {
-                payload["respiratoryRate"] = Int(rr)
-            }
-            if let bp = metrics.bloodPressure.phasic.last?.value {
-                payload["bloodPressure"] = Int(bp)
-            }
-        }
+
+        if let hr = median(of: hrBuffer) { payload["heartRate"] = Int(hr) }
+        if let rr = median(of: rrBuffer) { payload["respiratoryRate"] = Int(rr) }
+        if let bp = median(of: bpBuffer) { payload["bloodPressure"] = Int(bp) }
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -231,5 +247,16 @@ struct TriageAppClipExperience: ClipExperience {
                 }
             }
         }.resume()
+    }
+
+    // Median over a rolling buffer of (Date, Float) samples.
+    private func median(of buffer: [(Date, Float)]) -> Float? {
+        let values = buffer.map { $0.1 }
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        return sorted.count.isMultiple(of: 2)
+            ? (sorted[mid - 1] + sorted[mid]) / 2
+            : sorted[mid]
     }
 }
