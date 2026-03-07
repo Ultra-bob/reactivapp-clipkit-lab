@@ -4,7 +4,10 @@ import Speech
 internal import AVFoundation
 
 struct TriageAppClipExperience: ClipExperience {
-    static let urlPattern = "example.com/triage"
+    // Set to true to bypass Presage SDK and use random vitals (saves API credits)
+    private static let useMockVitals = true
+
+    static let urlPattern = "hospital.ca/triage"
     static let clipName = "Medical Triage"
     static let clipDescription = "Submit your medical symptoms quickly from your seat"
     static let teamName = "Triage Team"
@@ -41,6 +44,9 @@ struct TriageAppClipExperience: ClipExperience {
     @State private var bpBuffer: [(Date, Float)] = []
     private let bufferWindow: TimeInterval = 5.0
 
+    // Mock vitals timer
+    @State private var mockTimer: Timer? = nil
+
     @ObservedObject private var sdk = SmartSpectraSwiftSDK.shared
     @ObservedObject private var vitalsProcessor = SmartSpectraVitalsProcessor.shared
 
@@ -60,8 +66,24 @@ struct TriageAppClipExperience: ClipExperience {
                     if submitted {
                         ClipSuccessOverlay(message: "Symptoms received! Please wait for a nurse.")
                     } else {
-                        // Live camera preview
-                        if let cameraImage = vitalsProcessor.imageOutput {
+                        // Live camera preview (or mock placeholder)
+                        if Self.useMockVitals {
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Color(.systemGray5))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 220)
+                                .overlay(
+                                    VStack(spacing: 8) {
+                                        Image(systemName: "waveform.path.ecg")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(.orange)
+                                        Text("Mock Mode — No Camera")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    }
+                                )
+                                .padding(.horizontal, 24)
+                        } else if let cameraImage = vitalsProcessor.imageOutput {
                             Image(uiImage: cameraImage)
                                 .resizable()
                                 .scaledToFill()
@@ -183,20 +205,29 @@ struct TriageAppClipExperience: ClipExperience {
             .scrollIndicators(.hidden)
         }
         .onAppear {
-            SmartSpectraSwiftSDK.shared.setApiKey("ShdNWcKc0D5alluayVgzv75yQxjWfOg3953qUs4M")
+            requestSeatNumber = context.queryParameters["seatNumber"] ?? ""
 
-            sdk.setSmartSpectraMode(.continuous)
-            sdk.setMeasurementDuration(30.0)
-            sdk.setCameraPosition(.front)
-
-            vitalsProcessor.startProcessing()
-            vitalsProcessor.startRecording()
+            if Self.useMockVitals {
+                startMockVitals()
+            } else {
+                SmartSpectraSwiftSDK.shared.setApiKey("ShdNWcKc0D5alluayVgzv75yQxjWfOg3953qUs4M")
+                sdk.setSmartSpectraMode(.continuous)
+                sdk.setMeasurementDuration(30.0)
+                sdk.setCameraPosition(.front)
+                vitalsProcessor.startProcessing()
+                vitalsProcessor.startRecording()
+            }
         }
         .onDisappear {
-            vitalsProcessor.stopRecording()
-            vitalsProcessor.stopProcessing()
+            if Self.useMockVitals {
+                stopMockVitals()
+            } else {
+                vitalsProcessor.stopRecording()
+                vitalsProcessor.stopProcessing()
+            }
         }
         .onChange(of: sdk.metricsBuffer) { metrics in
+            guard !Self.useMockVitals else { return }
             guard let metrics = metrics else { return }
             let now = Date()
             let cutoff = now.addingTimeInterval(-bufferWindow)
@@ -227,18 +258,29 @@ struct TriageAppClipExperience: ClipExperience {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Include seat number and symptoms
-        var payload: [String: Any] = [
-            "symptoms": symptoms,
-            "seatNumber": "Unknown"
-        ]
+        // Build payload matching the API format
+        let seatNumber = context.queryParameters["seatNumber"].flatMap(Int.init) ?? 1
+        let hrValue = median(of: hrBuffer).map { Int($0) } ?? -1
+        let rrValue = median(of: rrBuffer).map { Int($0) } ?? -1
+        let bpValue = median(of: bpBuffer).map { Int($0) } ?? -1
+        let bloodPressureString = "\(bpValue)"
+        let healthCard = context.queryParameters["healthCardNumber"] ?? "unknown"
 
-        if let hr = median(of: hrBuffer) { payload["heartRate"] = Int(hr) }
-        if let rr = median(of: rrBuffer) { payload["respiratoryRate"] = Int(rr) }
-        if let bp = median(of: bpBuffer) { payload["bloodPressure"] = Int(bp) }
+        let payload: [String: Any] = [
+            "seatNumber": seatNumber,
+            "heartRate": hrValue,
+            "respiratoryRate": rrValue,
+            "bloodPressure": bloodPressureString,
+            "symptoms": symptoms,
+            "healthCardNumber": healthCard
+        ]
         
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let jsonData = try JSONSerialization.data(withJSONObject: payload)
+            request.httpBody = jsonData
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+                print("Submitting payload: \(jsonString)")
+            }
         } catch {
             errorMessage = "Failed to format data"
             isSubmitting = false
@@ -285,6 +327,33 @@ struct TriageAppClipExperience: ClipExperience {
         return sorted.count.isMultiple(of: 2)
             ? (sorted[mid - 1] + sorted[mid]) / 2
             : sorted[mid]
+    }
+
+    // MARK: - Mock Vitals
+
+    private func startMockVitals() {
+        mockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            let now = Date()
+            let cutoff = now.addingTimeInterval(-bufferWindow)
+
+            let hr = Float.random(in: 60...100)
+            let rr = Float.random(in: 12...20)
+            let bp = Float.random(in: 90...140)
+
+            hrBuffer.append((now, hr))
+            hrBuffer.removeAll { $0.0 < cutoff }
+
+            rrBuffer.append((now, rr))
+            rrBuffer.removeAll { $0.0 < cutoff }
+
+            bpBuffer.append((now, bp))
+            bpBuffer.removeAll { $0.0 < cutoff }
+        }
+    }
+
+    private func stopMockVitals() {
+        mockTimer?.invalidate()
+        mockTimer = nil
     }
 
     // MARK: - Dictation
