@@ -106,14 +106,16 @@ struct CameraPreviewView: UIViewRepresentable {
 // MARK: - From Submissions/TriageAppClip/TriageAppClipExperience.swift
 
 import SwiftUI
+#if canImport(SmartSpectraSwiftSDK)
 import SmartSpectraSwiftSDK
+#endif
 import Speech
 import Vision
 import AVFoundation
 
 struct TriageAppClipExperience: ClipExperience {
     // Set to true to bypass Presage SDK and use random vitals (saves API credits)
-    private static let useMockVitals = false
+    private static let useMockVitals = true
     // Set to true to display the raw OCR text overlay for debugging the health card scanner
     private static let showOCRDebugView = true
 
@@ -142,6 +144,9 @@ struct TriageAppClipExperience: ClipExperience {
     }
     @State private var currentStage: TriageStage = .faceScan
     @State private var firstVitalReceivedTime: Date? = nil
+    @State private var vitalsCountdown: Double = 5.0
+    @State private var countdownTimer: Timer? = nil
+    private let vitalsScanDuration: Double = 5.0
 
     @State private var symptoms: String = ""
     @State private var requestSeatNumber: String = ""
@@ -175,8 +180,10 @@ struct TriageAppClipExperience: ClipExperience {
     // Front camera for mock mode (provides preview + OCR frames)
     @StateObject private var cameraManager = CameraManager()
 
+    #if canImport(SmartSpectraSwiftSDK)
     @ObservedObject private var sdk = SmartSpectraSwiftSDK.shared
     @ObservedObject private var vitalsProcessor = SmartSpectraVitalsProcessor.shared
+    #endif
 
     var body: some View {
         // Custom colors for the design
@@ -201,6 +208,33 @@ struct TriageAppClipExperience: ClipExperience {
                     .padding(.bottom, 16)
             }
             .frame(height: 70)
+
+            // 3-segment progress bar
+            if !submitted {
+                HStack(spacing: 6) {
+                    ForEach(0..<3, id: \.self) { index in
+                        let stageIndex = currentStage == .faceScan ? 0 : (currentStage == .healthCard ? 1 : 2)
+                        let isCompleted = index < stageIndex
+                        let isCurrent = index == stageIndex
+
+                        Capsule()
+                            .fill(isCompleted ? headerGreen : (isCurrent ? headerGreen.opacity(0.6) : Color(white: 0.85)))
+                            .frame(height: 6)
+                            .overlay {
+                                if isCurrent {
+                                    GeometryReader { geo in
+                                        Capsule()
+                                            .fill(headerGreen)
+                                            .frame(width: geo.size.width * 0.5)
+                                    }
+                                }
+                            }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+                .animation(.easeInOut(duration: 0.3), value: currentStage)
+            }
 
             ScrollView {
                 VStack(spacing: 20) {
@@ -251,7 +285,9 @@ struct TriageAppClipExperience: ClipExperience {
                                     }
                                     .padding(.horizontal, 24)
                                     .transition(.opacity)
-                            } else if let cameraImage = vitalsProcessor.imageOutput {
+                            }
+                            #if canImport(SmartSpectraSwiftSDK)
+                            if !Self.useMockVitals, let cameraImage = vitalsProcessor.imageOutput {
                                 Image(uiImage: cameraImage)
                                     .resizable()
                                     .scaledToFill()
@@ -260,24 +296,8 @@ struct TriageAppClipExperience: ClipExperience {
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
                                     .padding(.horizontal, 24)
                                     .transition(.opacity)
-                            } else {
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(.systemGray5))
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 240)
-                                    .overlay(
-                                        VStack(spacing: 8) {
-                                            Image(systemName: "camera.fill")
-                                                .font(.system(size: 32))
-                                                .foregroundColor(.secondary)
-                                            Text("Starting camera...")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    )
-                                    .padding(.horizontal, 24)
-                                    .transition(.opacity)
                             }
+                            #endif
                         }
 
                         if currentStage == .faceScan {
@@ -292,7 +312,7 @@ struct TriageAppClipExperience: ClipExperience {
 
                                 HStack(spacing: 12) {
                                     if hrMedian == nil && rrMedian == nil && bpMedian == nil {
-                                        Text(vitalsProcessor.statusHint.isEmpty ? "Waiting for face..." : vitalsProcessor.statusHint)
+                                        Text("Waiting for face...")
                                             .font(.subheadline)
                                             .foregroundColor(.secondary)
                                             .italic()
@@ -336,11 +356,29 @@ struct TriageAppClipExperience: ClipExperience {
                                     }
                                     Spacer()
                                 }
-                                
+
                                 if firstVitalReceivedTime != nil {
-                                    ProgressView()
-                                        .padding(.top, 16)
-                                        .frame(maxWidth: .infinity, alignment: .center)
+                                    VStack(spacing: 8) {
+                                        ZStack {
+                                            Circle()
+                                                .stroke(Color(white: 0.85), lineWidth: 4)
+                                                .frame(width: 56, height: 56)
+                                            Circle()
+                                                .trim(from: 0, to: 1.0 - (vitalsCountdown / vitalsScanDuration))
+                                                .stroke(headerGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                                                .frame(width: 56, height: 56)
+                                                .rotationEffect(.degrees(-90))
+                                                .animation(.linear(duration: 0.25), value: vitalsCountdown)
+                                            Text("\(Int(ceil(vitalsCountdown)))s")
+                                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                                .foregroundColor(headerTextDarkBlue)
+                                        }
+                                        Text("Collecting vitals…")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.top, 16)
+                                    .frame(maxWidth: .infinity, alignment: .center)
                                 }
                             }
                             .padding(.horizontal, 24)
@@ -412,8 +450,8 @@ struct TriageAppClipExperience: ClipExperience {
                                         }
                                         
                                         if symptoms.isEmpty {
-                                            Text("Type...")
-                                                .font(.system(size: 18))
+                                            Text("e.g. \"I have had a headache and mild fever since yesterday morning. I also feel nauseous and dizzy when standing up.\"")
+                                                .font(.system(size: 16))
                                                 .foregroundColor(Color(white: 0.6))
                                                 .padding(.horizontal, 20)
                                                 .padding(.vertical, 24)
@@ -471,19 +509,25 @@ struct TriageAppClipExperience: ClipExperience {
             .scrollIndicators(.hidden)
         }
         .onAppear {
-            requestSeatNumber = context.queryParameters["seatNumber"] ?? ""
+            requestSeatNumber = context.queryParameters["seat"] ?? ""
 
             if Self.useMockVitals {
                 startMockVitals()
                 cameraManager.start()
-            } else {
-                SmartSpectraSwiftSDK.shared.setApiKey("ShdNWcKc0D5alluayVgzv75yQxjWfOg3953qUs4M")
+            }
+            #if canImport(SmartSpectraSwiftSDK)
+            if !Self.useMockVitals {
+                let apiKey = Bundle.main.object(forInfoDictionaryKey: "SMARTSPECTRA_API_KEY") as? String
+                    ?? ProcessInfo.processInfo.environment["SMARTSPECTRA_API_KEY"]
+                    ?? ""
+                SmartSpectraSwiftSDK.shared.setApiKey(apiKey)
                 sdk.setSmartSpectraMode(.continuous)
                 sdk.setMeasurementDuration(30.0)
                 sdk.setCameraPosition(.front)
                 vitalsProcessor.startProcessing()
                 vitalsProcessor.startRecording()
             }
+            #endif
             startOCRScanning()
         }
         .onDisappear {
@@ -491,11 +535,15 @@ struct TriageAppClipExperience: ClipExperience {
             if Self.useMockVitals {
                 stopMockVitals()
                 cameraManager.stop()
-            } else {
+            }
+            #if canImport(SmartSpectraSwiftSDK)
+            if !Self.useMockVitals {
                 vitalsProcessor.stopRecording()
                 vitalsProcessor.stopProcessing()
             }
+            #endif
         }
+        #if canImport(SmartSpectraSwiftSDK)
         .onChange(of: sdk.metricsBuffer) { metrics in
             guard !Self.useMockVitals else { return }
             guard let metrics = metrics else { return }
@@ -517,6 +565,7 @@ struct TriageAppClipExperience: ClipExperience {
             
             checkFaceScanProgress()
         }
+        #endif
     }
     
     // MARK: - Face Scan Progress Check
@@ -528,12 +577,29 @@ struct TriageAppClipExperience: ClipExperience {
         if !hrBuffer.isEmpty || !rrBuffer.isEmpty || !bpBuffer.isEmpty {
             if firstVitalReceivedTime == nil {
                 firstVitalReceivedTime = Date()
-            } else if let startTime = firstVitalReceivedTime, Date().timeIntervalSince(startTime) >= 5.0 {
+                vitalsCountdown = vitalsScanDuration
+                startCountdownTimer()
+            } else if let startTime = firstVitalReceivedTime, Date().timeIntervalSince(startTime) >= vitalsScanDuration {
+                stopCountdownTimer()
                 withAnimation {
                     currentStage = .healthCard
                 }
             }
         }
+    }
+
+    private func startCountdownTimer() {
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            guard let start = firstVitalReceivedTime else { return }
+            let elapsed = Date().timeIntervalSince(start)
+            vitalsCountdown = max(0, vitalsScanDuration - elapsed)
+        }
+    }
+
+    private func stopCountdownTimer() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        vitalsCountdown = 0
     }
 
     private func submitSymptoms() {
@@ -548,7 +614,7 @@ struct TriageAppClipExperience: ClipExperience {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         // Build payload matching the API format
-        let seatNumber = context.queryParameters["seatNumber"].flatMap(Int.init) ?? 1
+        let seatNumber = context.queryParameters["seat"].flatMap(Int.init) ?? 1
         let hrValue = median(of: hrBuffer).map { Int($0) } ?? -1
         let rrValue = median(of: rrBuffer).map { Int($0) } ?? -1
         let bpValue = median(of: bpBuffer).map { Int($0) } ?? -1
@@ -657,9 +723,18 @@ struct TriageAppClipExperience: ClipExperience {
                 stopOCRScanning()
                 return
             }
-            if let image = Self.useMockVitals ? cameraManager.latestFrame : vitalsProcessor.imageOutput {
-                runOCROnFrame(image)
+            if Self.useMockVitals {
+                if let image = cameraManager.latestFrame {
+                    runOCROnFrame(image)
+                }
             }
+            #if canImport(SmartSpectraSwiftSDK)
+            if !Self.useMockVitals {
+                if let image = vitalsProcessor.imageOutput {
+                    runOCROnFrame(image)
+                }
+            }
+            #endif
         }
     }
 
