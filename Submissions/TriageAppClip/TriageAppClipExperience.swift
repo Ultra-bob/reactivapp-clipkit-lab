@@ -10,12 +10,12 @@ struct TriageAppClipExperience: ClipExperience {
     // Set to true to bypass Presage SDK and use random vitals (saves API credits)
     private static let useMockVitals = true
     // Set to true to display the raw OCR text overlay for debugging the health card scanner
-    private static let showOCRDebugView = true
+    private static let showOCRDebugView = false
 
     static let urlPattern = "hospital.ca/triage"
-    static let clipName = "Medical Triage"
+    static let clipName = "ClipIn"
     static let clipDescription = "Submit your medical symptoms quickly from your seat"
-    static let teamName = "Triage Team"
+    static let teamName = "Team ClipIn"
 
     static let touchpoint: JourneyTouchpoint = JourneyTouchpoint(
         id: "triage-submit",
@@ -127,7 +127,7 @@ struct TriageAppClipExperience: ClipExperience {
                 headerGreen
                     .ignoresSafeArea(.all, edges: .top)
                 
-                Text("Welcome")
+                Text("Welcome to ClipIn")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(headerTextDarkBlue)
                     .padding(.bottom, 16)

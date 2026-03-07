@@ -1,7 +1,7 @@
-# Solution: Medical Triage App Clip
+# Solution: ClipIn — Medical Triage App Clip
 
-## Team Name: Triage Team
-## Clip Name: Medical Triage
+## Team Name: Team ClipIn
+## Clip Name: ClipIn
 ## Invocation URL Pattern: `hospital.ca/triage?seat={seatNumber}`
 
 ---
