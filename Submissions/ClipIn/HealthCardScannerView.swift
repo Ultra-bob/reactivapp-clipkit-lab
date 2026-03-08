@@ -11,12 +11,15 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
 
     private let session = AVCaptureSession()
     private let outputQueue = DispatchQueue(label: "camera.frame.queue", qos: .userInitiated)
+    private let ciContext = CIContext()
 
-    var previewLayer: AVCaptureVideoPreviewLayer {
+    var captureSession: AVCaptureSession { session }
+
+    lazy var previewLayer: AVCaptureVideoPreviewLayer = {
         let layer = AVCaptureVideoPreviewLayer(session: session)
         layer.videoGravity = .resizeAspectFill
         return layer
-    }
+    }()
 
     func start() {
         guard !session.isRunning else { return }
@@ -57,8 +60,7 @@ final class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputS
         // Only update ~1 fps to keep things lightweight
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
         let uiImage = UIImage(cgImage: cgImage)
 
         DispatchQueue.main.async { [weak self] in
@@ -85,7 +87,7 @@ struct CameraPreviewView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView(frame: .zero)
-        view.videoPreviewLayer.session = cameraManager.previewLayer.session
+        view.videoPreviewLayer.session = cameraManager.captureSession
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
         return view
     }

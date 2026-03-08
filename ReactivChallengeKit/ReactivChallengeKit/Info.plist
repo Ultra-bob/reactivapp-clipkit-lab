@@ -2,15 +2,5 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSCameraUsageDescription</key>
-	<string>We need camera access to measure your heart rate and breathing.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>We need microphone access to record your voice for symptom dictation.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>We need speech recognition permission to convert your voice to text.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
 </dict>
 </plist>

@@ -536,7 +536,11 @@ struct TriageAppClipExperience: ClipExperience {
         isSubmitting = true
         errorMessage = nil
         
-        let url = URL(string: "https://hack-canada2026-dashboard.vercel.app/api/triage")!
+        guard let url = URL(string: "https://hack-canada2026-dashboard.vercel.app/api/triage") else {
+            errorMessage = "Invalid URL"
+            isSubmitting = false
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -561,9 +565,11 @@ struct TriageAppClipExperience: ClipExperience {
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: payload)
             request.httpBody = jsonData
+            #if DEBUG
             if let jsonString = String(data: jsonData, encoding: .utf8) {
                 print("Submitting payload: \(jsonString)")
             }
+            #endif
         } catch {
             errorMessage = "Failed to format data"
             isSubmitting = false
@@ -575,26 +581,36 @@ struct TriageAppClipExperience: ClipExperience {
                 isSubmitting = false
                 
                 if let error = error {
+                    #if DEBUG
                     print("Network error submitting symptoms: \(error)")
+                    #endif
                     errorMessage = "Network error: \(error.localizedDescription)"
                     return
                 }
                 
                 if let httpResponse = response as? HTTPURLResponse {
                     if (200...299).contains(httpResponse.statusCode) {
+                        #if DEBUG
                         print("Symptoms submitted successfully")
+                        #endif
                         submitted = true
                     } else {
+                        #if DEBUG
                         print("Server returned error status code: \(httpResponse.statusCode)")
+                        #endif
                         var errorDisplay = "Server returned error: \(httpResponse.statusCode)"
                         if let data = data, let responseString = String(data: data, encoding: .utf8) {
+                            #if DEBUG
                             print("Server response: \(responseString)")
+                            #endif
                             errorDisplay += "\nDetails: \(responseString)"
                         }
                         errorMessage = errorDisplay
                     }
                 } else {
+                    #if DEBUG
                     print("Unknown network response format")
+                    #endif
                     errorMessage = "Server returned unknown error"
                 }
             }
@@ -680,11 +696,11 @@ struct TriageAppClipExperience: ClipExperience {
             let context = CIContext()
             finalCGImage = context.createCGImage(ci, from: ci.extent)
         } else {
-            UIGraphicsBeginImageContext(image.size)
-            image.draw(in: CGRect(origin: .zero, size: image.size))
-            let drawnImage = UIGraphicsGetImageFromCurrentImageContext()
-            UIGraphicsEndImageContext()
-            finalCGImage = drawnImage?.cgImage
+            let renderer = UIGraphicsImageRenderer(size: image.size)
+            let rendered = renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
+            finalCGImage = rendered.cgImage
         }
         
         guard let cgImage = finalCGImage else { return }
@@ -771,6 +787,10 @@ struct TriageAppClipExperience: ClipExperience {
 
                     let inputNode = audioEngine.inputNode
                     let format = inputNode.outputFormat(forBus: 0)
+                    guard format.sampleRate > 0 else {
+                        errorMessage = "Microphone is not available."
+                        return
+                    }
                     inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
                         request.append(buffer)
                     }
@@ -787,8 +807,10 @@ struct TriageAppClipExperience: ClipExperience {
     }
 
     private func stopDictation() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask?.cancel()
